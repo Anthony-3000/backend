@@ -1,0 +1,10 @@
+.env
+uploads/
+node_modules/node_modules/
+
+node_modules/
+.wrangler/
+.dev.vars
+.env
+.env.*
+!.env.example
