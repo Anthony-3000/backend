@@ -1,8 +1,9 @@
-import { execFile } from "node:child_process";
-import { writeFile, unlink } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { randomUUID } from "node:crypto";
+import {
+    S3Client,
+    PutObjectCommand,
+    DeleteObjectCommand
+} from "@aws-sdk/client-s3";
 import sharp from "sharp";
 import Media from "../database/schema/media.js";
 import Bakery from "../database/schema/bakery.js";
@@ -14,47 +15,45 @@ const createError = (message, statusCode = 400) => {
     return error;
 };
 
-const getR2Config = () => {
-    const { R2_ACCOUNT_ID, R2_BUCKET_NAME, R2_PUBLIC_URL } = process.env;
+let r2Client = null;
 
-    if (!R2_ACCOUNT_ID || !R2_BUCKET_NAME) {
+const getR2Client = () => {
+    if (r2Client) return r2Client;
+
+    const { R2_ACCOUNT_ID, R2_BUCKET_NAME, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY } = process.env;
+
+    if (!R2_ACCOUNT_ID || !R2_BUCKET_NAME || !R2_ACCESS_KEY_ID || !R2_SECRET_ACCESS_KEY) {
         throw createError("R2 is not configured", 500);
     }
 
-    return { accountId: R2_ACCOUNT_ID, bucketName: R2_BUCKET_NAME, publicUrl: R2_PUBLIC_URL };
+    r2Client = new S3Client({
+        region: "auto",
+        endpoint: `https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com`,
+        credentials: {
+            accessKeyId: R2_ACCESS_KEY_ID,
+            secretAccessKey: R2_SECRET_ACCESS_KEY
+        }
+    });
+
+    return r2Client;
 };
 
-const runWrangler = (args) => new Promise((resolve, reject) => {
-    execFile("wrangler", args, { maxBuffer: 50 * 1024 * 1024 }, (error, stdout, stderr) => {
-        if (error) {
-            error.stderr = stderr;
-            return reject(error);
-        }
-        resolve(stdout);
-    });
-});
-
 const uploadToR2 = async ({ buffer, r2Key, contentType }) => {
-    const { bucketName } = getR2Config();
-    const tmpFile = join(tmpdir(), `r2-upload-${randomUUID()}`);
-
-    await writeFile(tmpFile, buffer);
-    try {
-        await runWrangler([
-            "r2", "object", "put",
-            `${bucketName}/${r2Key}`,
-            "--file", tmpFile,
-            "--content-type", contentType,
-            "--remote"
-        ]);
-    } finally {
-        await unlink(tmpFile).catch(() => {});
-    }
+    const { R2_BUCKET_NAME } = process.env;
+    await getR2Client().send(new PutObjectCommand({
+        Bucket: R2_BUCKET_NAME,
+        Key: r2Key,
+        Body: buffer,
+        ContentType: contentType
+    }));
 };
 
 const deleteFromR2 = async (r2Key) => {
-    const { bucketName } = getR2Config();
-    await runWrangler(["r2", "object", "delete", `${bucketName}/${r2Key}`, "--remote"]);
+    const { R2_BUCKET_NAME } = process.env;
+    await getR2Client().send(new DeleteObjectCommand({
+        Bucket: R2_BUCKET_NAME,
+        Key: r2Key
+    }));
 };
 
 const buildR2Key = (bakeryId, type, ext) => {
@@ -96,8 +95,8 @@ const prepareUpload = async (file) => {
 };
 
 const buildPublicUrl = (r2Key) => {
-    const { publicUrl } = getR2Config();
-    if (publicUrl) return `${publicUrl.replace(/\/$/, "")}/${r2Key}`;
+    const { R2_PUBLIC_URL } = process.env;
+    if (R2_PUBLIC_URL) return `${R2_PUBLIC_URL.replace(/\/$/, "")}/${r2Key}`;
     return null;
 };
 

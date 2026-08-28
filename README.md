@@ -52,7 +52,7 @@ HTTP request
 - MongoDB and Mongoose
 - JWT stored in an HTTP-only cookie
 - bcrypt password hashing
-- Cloudflare R2 media storage via wrangler CLI
+- Cloudflare R2 media storage via the AWS S3 SDK (API-token auth, works on Render/serverless)
 - Multer in-memory uploads
 - Sharp image processing
 - CORS and cookie-parser
@@ -63,7 +63,7 @@ HTTP request
 
 - Node.js 20 LTS or later is recommended.
 - MongoDB configured as a replica set if registration/category/item reordering transactions will be used. MongoDB standalone mode does not support multi-document transactions.
-- A Cloudflare account with R2 enabled, and the `wrangler` CLI installed and authenticated (`npx wrangler login`).
+- A Cloudflare account with R2 enabled. Media uploads use an R2 API token (`R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY`), so the `wrangler` CLI and OAuth login are **not** required to run the app. Bucket creation and configuration below still use `wrangler` once during setup.
 
 ### Install and run
 
@@ -102,6 +102,15 @@ wrangler r2 bucket cors set model-bakery --file /tmp/cors.json
 rm /tmp/cors.json
 ```
 
+### R2 API token (required for uploads)
+
+The app authenticates to R2 with an API token, not a wrangler login. This is what lets uploads work on Render and other hosts.
+
+1. Cloudflare dashboard → **R2** → **Manage R2 API Tokens** → **Create API Token**.
+2. Under **Permissions**, add **Object Read & Write** for the `model-bakery` bucket.
+3. Copy the **Access Key ID** and **Secret Access Key** into `.env` / Render env vars as `R2_ACCESS_KEY_ID` and `R2_SECRET_ACCESS_KEY`.
+4. Keep the secret out of git and logs.
+
 Then copy the public URL (shown after enabling dev-url, e.g. `https://pub-xxx.r2.dev`) into your `.env` as `R2_PUBLIC_URL`.
 
 ## Environment variables
@@ -116,6 +125,8 @@ NODE_ENV=development
 R2_ACCOUNT_ID=your-cloudflare-account-id
 R2_BUCKET_NAME=your-r2-bucket-name
 R2_PUBLIC_URL=https://pub-xxx.r2.dev
+R2_ACCESS_KEY_ID=your-r2-access-key-id
+R2_SECRET_ACCESS_KEY=your-r2-secret-access-key
 ```
 
 | Variable | Required | Purpose |
@@ -126,6 +137,8 @@ R2_PUBLIC_URL=https://pub-xxx.r2.dev
 | `R2_ACCOUNT_ID` | For media uploads | Cloudflare account ID |
 | `R2_BUCKET_NAME` | For media uploads | R2 bucket name (must exist) |
 | `R2_PUBLIC_URL` | For media uploads | Public R2.dev URL or custom domain for serving files |
+| `R2_ACCESS_KEY_ID` | For media uploads | R2 API token access key ID |
+| `R2_SECRET_ACCESS_KEY` | For media uploads | R2 API token secret access key |
 
 ## Application flow
 
@@ -419,7 +432,7 @@ model-bakery/<bakeryId>/images/<uuid>.webp
 model-bakery/<bakeryId>/videos/<uuid>.<ext>
 ```
 
-The upload uses the `wrangler` CLI (`wrangler r2 object put`) which authenticates via your Cloudflare OAuth session. No API tokens are needed.
+The upload uses the AWS S3 SDK (`@aws-sdk/client-s3`) authenticated with an R2 API token via `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY`. It does **not** depend on a local `wrangler` OAuth login, so it works on Render and other deployment hosts.
 
 If MongoDB creation fails after an R2 upload, the service attempts to delete the newly uploaded R2 object.
 
